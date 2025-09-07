@@ -1,0 +1,87 @@
+version: "3.9"
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: pstore-sql
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=Your_strong_password_123
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Your_strong_password_123 -Q 'SELECT 1' -No"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: pstore-rabbit
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  catalog-api:
+    build: ./services/Catalog/PStore.Catalog.Api
+    container_name: pstore-catalog
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__Default=Server=sqlserver,1433;Database=PStore_Catalog;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;
+    ports:
+      - "5001:80"
+
+  orders-api:
+    build: ./services/Orders/PStore.Orders.Api
+    container_name: pstore-orders
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__Default=Server=sqlserver,1433;Database=PStore_Orders;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;
+      - Catalog__BaseUrl=http://pstore-catalog # referência interna no compose
+    ports:
+      - "5002:80"
+
+  payments-worker:
+    build: ./services/Payments/PStore.Payments.Worker
+    container_name: pstore-payments
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ConnectionStrings__Default=Server=sqlserver,1433;Database=PStore_Payments;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;
+      - Rabbit__Host=rabbitmq
+      - Rabbit__Port=5672
+      - Rabbit__User=guest
+      - Rabbit__Pass=guest
+
+  orders-worker:
+    build: ./services/Orders/PStore.Orders.Worker
+    container_name: pstore-orders-worker
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ConnectionStrings__Default=Server=sqlserver,1433;Database=PStore_Orders;User Id=sa;Password=Your_strong_password_123;TrustServerCertificate=True;
+      - Rabbit__Host=rabbitmq
+      - Rabbit__Port=5672
+      - Rabbit__User=guest
+      - Rabbit__Pass=guest
+
+volumes:
+  sql_data:
